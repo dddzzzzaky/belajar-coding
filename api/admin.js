@@ -1,21 +1,4 @@
-// In-memory database
-let memoryDB = {
-  users: {
-    'testuser': {
-      username: 'testuser',
-      hash: 'c80c55a4cce4f5f3a6b9e5c9c1c0e4f5b9c8f5c9b8d0e1f2a3b4c5d6e7f8a9',
-      salt: '1234567890abcdef1234567890abcdef',
-      createdAt: new Date().toISOString()
-    },
-    'admin': {
-      username: 'admin',
-      hash: '9f6f5c3b1a0f8d7e6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4',
-      salt: 'fedcba9876543210fedcba9876543210',
-      createdAt: new Date().toISOString()
-    }
-  },
-  logs: []
-};
+import { memoryDB, getMemoryUser, getMemoryLastLogin } from '../lib/memoryDb.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -56,7 +39,7 @@ export default async function handler(req, res) {
     // Get user details
     const users = [];
     for (const u of usernames) {
-      let user = memoryDB.users[u];
+      let user = getMemoryUser(u);
       
       // Try KV if not in memory
       if (!user && global.kv) {
@@ -69,17 +52,7 @@ export default async function handler(req, res) {
       }
 
       if (user) {
-        let lastLogin = null;
-        
-        // Try to get last login from KV
-        if (global.kv) {
-          try {
-            const raw = await global.kv.get(`lastlogin:${u}`);
-            lastLogin = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
-          } catch (e) {
-            console.log('KV lastlogin fetch failed:', e.message);
-          }
-        }
+        const lastLogin = getMemoryLastLogin(u);
 
         users.push({
           username: u,
