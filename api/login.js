@@ -1,18 +1,25 @@
-import { kv } from '@vercel/kv';
 import crypto from 'crypto';
 
-// User database fallback (buat testing sebelum KV setup)
+// DEFAULT USER DATABASE (fallback saat KV belum setup)
 const DEFAULT_USERS = {
   'testuser': {
     username: 'testuser',
-    hash: 'd4d0f19e3bb2e8c0e89a37c2ef8bbe0d9fe50caf0a7c4a13e8e92e5f8c1d7e6f', // hash dari "password123"
-    salt: '1234567890abcdef1234567890abcdef'
+    hash: 'c80c55a4cce4f5f3a6b9e5c9c1c0e4f5b9c8f5c9b8d0e1f2a3b4c5d6e7f8a9',
+    salt: '1234567890abcdef1234567890abcdef',
+    createdAt: new Date().toISOString()
   },
   'admin': {
     username: 'admin',
-    hash: 'a3a6d4e9b8c7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3', // hash dari "admin123"
-    salt: 'fedcba9876543210fedcba9876543210'
+    hash: '9f6f5c3b1a0f8d7e6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4',
+    salt: 'fedcba9876543210fedcba9876543210',
+    createdAt: new Date().toISOString()
   }
+};
+
+// In-memory database untuk backup
+let memoryDB = {
+  users: { ...DEFAULT_USERS },
+  logs: []
 };
 
 function hashPassword(password, salt) {
@@ -25,18 +32,49 @@ function getIp(req) {
   return req.socket?.remoteAddress || 'unknown';
 }
 
-async function logAttempt(username, ip, success) {
+async function getUser(username) {
   try {
-    const entry = JSON.stringify({
-      username,
-      ip,
-      success,
-      time: new Date().toISOString()
-    });
-    await kv.lpush('login_logs', entry);
-    await kv.ltrim('login_logs', 0, 499);
+    if (global.kv) {
+      const raw = await global.kv.get(`user:${username}`);
+      if (raw) {
+        return typeof raw === 'string' ? JSON.parse(raw) : raw;
+      }
+    }
   } catch (e) {
-    console.error('Gagal mencatat log login (diabaikan):', e);
+    console.log('KV get failed:', e.message);
+  }
+  // Fallback ke memory
+  return memoryDB.users[username] || null;
+}
+
+async function logAttempt(username, ip, success) {
+  const entry = { username, ip, success, time: new Date().toISOString() };
+  
+  try {
+    if (global.kv) {
+      await global.kv.lpush('login_logs', JSON.stringify(entry));
+      await global.kv.ltrim('login_logs', 0, 499);
+    }
+  } catch (e) {
+    console.log('KV log failed:', e.message);
+  }
+  
+  memoryDB.logs.push(entry);
+  if (memoryDB.logs.length > 500) {
+    memoryDB.logs = memoryDB.logs.slice(-500);
+  }
+}
+
+async function saveLastLogin(username, ip) {
+  try {
+    if (global.kv) {
+      await global.kv.set(
+        `lastlogin:${username}`,
+        JSON.stringify({ ip, time: new Date().toISOString() })
+      );
+    }
+  } catch (e) {
+    console.log('KV lastlogin failed:', e.message);
   }
 }
 
@@ -52,55 +90,47 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Username dan password wajib diisi' });
   }
 
-  // Login khusus administrator dari env vars
+  // Admin login from env vars
   if (
     process.env.ADMIN_USERNAME &&
     process.env.ADMIN_PASSWORD &&
     username === process.env.ADMIN_USERNAME &&
     password === process.env.ADMIN_PASSWORD
   ) {
-    logAttempt(`${username} (admin)`, ip, true);
+    await logAttempt(`${username} (admin)`, ip, true);
     return res.status(200).json({ success: true, role: 'admin' });
   }
 
   try {
-    // Coba ambil dari KV dulu
-    let user = null;
-    try {
-      const raw = await kv.get(`user:${username}`);
-      user = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    } catch (kvError) {
-      // Kalau KV gagal, gunakan fallback default users
-      console.log('KV tidak tersedia, menggunakan fallback users:', kvError.message);
-      user = DEFAULT_USERS[username];
-    }
-
+    const user = await getUser(username);
     if (!user) {
-      logAttempt(username, ip, false);
+      await logAttempt(username, ip, false);
       return res.status(401).json({ error: 'salah' });
     }
 
     const hash = hashPassword(password, user.salt);
     const ok = hash === user.hash;
 
-    logAttempt(username, ip, ok);
+    await logAttempt(username, ip, ok);
 
     if (!ok) {
       return res.status(401).json({ error: 'salah' });
     }
 
-    // Simpan lastlogin (jika KV tersedia)
-    try {
-      await kv.set(`lastlogin:${username}`, JSON.stringify({ ip, time: new Date().toISOString() }));
-    } catch (e) {
-      console.error('Gagal simpan lastlogin (diabaikan):', e);
-    }
+    await saveLastLogin(username, ip);
 
-    return res.status(200).json({ success: true, role: 'user' });
+    return res.status(200).json({ success: true, role: 'user', username });
   } catch (e) {
     console.error('Login error:', e);
-    return res.status(500).json({
-      error: 'Server error: ' + e.message
-    });
+    return res.status(500).json({ error: 'Server error' });
   }
+}
+
+// Initialize KV
+if (typeof window === 'undefined') {
+  import('@vercel/kv')
+    .then(({ kv }) => {
+      global.kv = kv;
+    })
+    .catch(() => console.log('KV not available'));
 }
