@@ -1,25 +1,25 @@
 import crypto from 'crypto';
-
-// In-memory database
-let memoryDB = {
-  users: {
-    'testuser': {
-      username: 'testuser',
-      hash: 'c80c55a4cce4f5f3a6b9e5c9c1c0e4f5b9c8f5c9b8d0e1f2a3b4c5d6e7f8a9',
-      salt: '1234567890abcdef1234567890abcdef',
-      createdAt: new Date().toISOString()
-    },
-    'admin': {
-      username: 'admin',
-      hash: '9f6f5c3b1a0f8d7e6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4',
-      salt: 'fedcba9876543210fedcba9876543210',
-      createdAt: new Date().toISOString()
-    }
-  }
-};
+import { memoryDB, getMemoryUser, saveMemoryUser } from '../lib/memoryDb.js';
 
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
+}
+
+async function userExists(username) {
+  // Check memory first
+  if (getMemoryUser(username)) return true;
+
+  // Check KV
+  try {
+    if (global.kv) {
+      const existing = await global.kv.get(`user:${username}`);
+      if (existing) return true;
+    }
+  } catch (e) {
+    console.log('KV check failed:', e.message);
+  }
+
+  return false;
 }
 
 async function saveUser(username, hash, salt) {
@@ -30,7 +30,10 @@ async function saveUser(username, hash, salt) {
     createdAt: new Date().toISOString()
   };
 
-  // Save to KV if available
+  // Save to memory
+  saveMemoryUser(username, userData);
+
+  // Try KV if available
   try {
     if (global.kv) {
       await global.kv.set(`user:${username}`, JSON.stringify(userData));
@@ -40,8 +43,6 @@ async function saveUser(username, hash, salt) {
     console.log('KV save failed:', e.message);
   }
 
-  // Save to memory (always works)
-  memoryDB.users[username] = userData;
   return userData;
 }
 
@@ -73,21 +74,10 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Check if user exists in memory
-    if (memoryDB.users[username]) {
+    // Check if user already exists
+    const exists = await userExists(username);
+    if (exists) {
       return res.status(409).json({ error: 'Username sudah terdaftar' });
-    }
-
-    // Check if exists in KV
-    if (global.kv) {
-      try {
-        const existing = await global.kv.get(`user:${username}`);
-        if (existing) {
-          return res.status(409).json({ error: 'Username sudah terdaftar' });
-        }
-      } catch (e) {
-        console.log('KV check failed:', e.message);
-      }
     }
 
     // Create new user
@@ -96,7 +86,7 @@ export default async function handler(req, res) {
 
     await saveUser(username, hash, salt);
 
-    return res.status(201).json({ success: true, message: 'Berhasil daftar!' });
+    return res.status(201).json({ success: true, message: 'Berhasil daftar! Silakan login' });
   } catch (e) {
     console.error('Register error:', e);
     return res.status(500).json({ error: 'Server error' });
