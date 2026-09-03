@@ -1,26 +1,5 @@
 import crypto from 'crypto';
-
-// DEFAULT USER DATABASE (fallback saat KV belum setup)
-const DEFAULT_USERS = {
-  'testuser': {
-    username: 'testuser',
-    hash: 'c80c55a4cce4f5f3a6b9e5c9c1c0e4f5b9c8f5c9b8d0e1f2a3b4c5d6e7f8a9',
-    salt: '1234567890abcdef1234567890abcdef',
-    createdAt: new Date().toISOString()
-  },
-  'admin': {
-    username: 'admin',
-    hash: '9f6f5c3b1a0f8d7e6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4',
-    salt: 'fedcba9876543210fedcba9876543210',
-    createdAt: new Date().toISOString()
-  }
-};
-
-// In-memory database untuk backup
-let memoryDB = {
-  users: { ...DEFAULT_USERS },
-  logs: []
-};
+import { memoryDB, getMemoryUser, addMemoryLog, saveMemoryLastLogin } from '../lib/memoryDb.js';
 
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
@@ -33,39 +12,31 @@ function getIp(req) {
 }
 
 async function getUser(username) {
+  // Check memory first (fastest)
+  const memoryUser = getMemoryUser(username);
+  if (memoryUser) return memoryUser;
+
+  // Try KV if available
   try {
     if (global.kv) {
       const raw = await global.kv.get(`user:${username}`);
       if (raw) {
-        return typeof raw === 'string' ? JSON.parse(raw) : raw;
+        const user = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return user;
       }
     }
   } catch (e) {
     console.log('KV get failed:', e.message);
   }
-  // Fallback ke memory
-  return memoryDB.users[username] || null;
-}
 
-async function logAttempt(username, ip, success) {
-  const entry = { username, ip, success, time: new Date().toISOString() };
-  
-  try {
-    if (global.kv) {
-      await global.kv.lpush('login_logs', JSON.stringify(entry));
-      await global.kv.ltrim('login_logs', 0, 499);
-    }
-  } catch (e) {
-    console.log('KV log failed:', e.message);
-  }
-  
-  memoryDB.logs.push(entry);
-  if (memoryDB.logs.length > 500) {
-    memoryDB.logs = memoryDB.logs.slice(-500);
-  }
+  return null;
 }
 
 async function saveLastLogin(username, ip) {
+  // Save to memory
+  saveMemoryLastLogin(username, ip);
+
+  // Try KV if available
   try {
     if (global.kv) {
       await global.kv.set(
@@ -74,7 +45,7 @@ async function saveLastLogin(username, ip) {
       );
     }
   } catch (e) {
-    console.log('KV lastlogin failed:', e.message);
+    console.log('KV lastlogin save failed:', e.message);
   }
 }
 
@@ -97,24 +68,25 @@ export default async function handler(req, res) {
     username === process.env.ADMIN_USERNAME &&
     password === process.env.ADMIN_PASSWORD
   ) {
-    await logAttempt(`${username} (admin)`, ip, true);
+    addMemoryLog(`${username} (admin)`, ip, true);
     return res.status(200).json({ success: true, role: 'admin' });
   }
 
   try {
     const user = await getUser(username);
+    
     if (!user) {
-      await logAttempt(username, ip, false);
-      return res.status(401).json({ error: 'salah' });
+      addMemoryLog(username, ip, false);
+      return res.status(401).json({ error: 'Username atau password salah' });
     }
 
     const hash = hashPassword(password, user.salt);
     const ok = hash === user.hash;
 
-    await logAttempt(username, ip, ok);
+    addMemoryLog(username, ip, ok);
 
     if (!ok) {
-      return res.status(401).json({ error: 'salah' });
+      return res.status(401).json({ error: 'Username atau password salah' });
     }
 
     await saveLastLogin(username, ip);
