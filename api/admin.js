@@ -4,6 +4,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+  
 
   const { adminUser, adminPass } = req.body || {};
 
@@ -52,8 +53,15 @@ export default async function handler(req, res) {
       }
 
       if (user) {
-        const lastLogin = getMemoryLastLogin(u);
-
+        let lastLogin = getMemoryLastLogin(u);
+if (!lastLogin && global.kv) {
+  try {
+    const raw = await global.kv.get(`lastlogin:${u}`);
+    lastLogin = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
+  } catch (e) {
+    console.log('KV lastlogin fetch failed:', e.message);
+  }
+}
         users.push({
           username: u,
           createdAt: user.createdAt || null,
