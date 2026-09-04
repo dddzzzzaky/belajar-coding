@@ -68,7 +68,7 @@ export default async function handler(req, res) {
     username === process.env.ADMIN_USERNAME &&
     password === process.env.ADMIN_PASSWORD
   ) {
-    addMemoryLog(`${username} (admin)`, ip, true);
+    await addMemoryLog(`${username} (admin)`, ip, true);
     return res.status(200).json({ success: true, role: 'admin' });
   }
 
@@ -76,14 +76,14 @@ export default async function handler(req, res) {
     const user = await getUser(username);
     
     if (!user) {
-      addMemoryLog(username, ip, false);
+      await addMemoryLog(username, ip, false);
       return res.status(401).json({ error: 'Username atau password salah' });
     }
 
     const hash = hashPassword(password, user.salt);
     const ok = hash === user.hash;
 
-    addMemoryLog(username, ip, ok);
+    await addMemoryLog(username, ip, ok);
 
     if (!ok) {
       return res.status(401).json({ error: 'Username atau password salah' });
