@@ -1,54 +1,80 @@
+import crypto from 'crypto';
 import { memoryDB, saveMemoryUser } from '../lib/memoryDb.js';
+
+// FIX: sama seperti file lain — KV di-lazy-load dan di-await.
+let kvPromise = null;
+function getKv() {
+  if (!kvPromise) {
+    kvPromise = import('@vercel/kv')
+      .then(({ kv }) => kv)
+      .catch((e) => {
+        console.log('KV not available:', e.message);
+        return null;
+      });
+  }
+  return kvPromise;
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST' && req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // FIX KRITIS: endpoint ini sebelumnya bisa diakses SIAPA SAJA tanpa login,
+  // dan langsung menampilkan username+password akun test di response JSON —
+  // artinya siapa pun yang tahu URL-nya dapat akun valid ke aplikasi ini.
+  // Sekarang wajib pakai kredensial admin yang sama seperti /api/admin.
+  const adminUser = req.query?.adminUser || req.body?.adminUser;
+  const adminPass = req.query?.adminPass || req.body?.adminPass;
+
+  if (
+    !process.env.ADMIN_USERNAME ||
+    !process.env.ADMIN_PASSWORD ||
+    adminUser !== process.env.ADMIN_USERNAME ||
+    adminPass !== process.env.ADMIN_PASSWORD
+  ) {
+    return res.status(403).json({ error: 'Bukan administrator' });
+  }
+
   try {
-    // Check if testuser already exists in memory
     if (memoryDB.users['testuser']) {
-      return res.json({ 
-        success: true, 
-        message: 'User testuser sudah ada',
-        username: 'testuser',
-        password: 'password123',
-        info: 'Gunakan credentials ini untuk login'
+      return res.json({
+        success: true,
+        message: 'User testuser sudah ada'
       });
     }
 
-    // If not, create testuser
-    const salt = '1234567890abcdef1234567890abcdef';
-    const hash = 'c80c55a4cce4f5f3a6b9e5c9c1c0e4f5b9c8f5c9b8d0e1f2a3b4c5d6e7f8a9';
+    // FIX: hash sebelumnya di-hardcode string acak yang panjangnya tidak
+    // sesuai output scrypt asli, jadi testuser sebenarnya TIDAK PERNAH bisa
+    // login dengan benar. Sekarang hash beneran dihitung dari passwordnya.
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync('password123', salt, 64).toString('hex');
 
-    saveMemoryUser('testuser', {
+    const userData = {
       username: 'testuser',
       hash,
       salt,
       createdAt: new Date().toISOString()
-    });
+    };
 
-    // Try save to KV also
-    if (global.kv) {
-      try {
-        await global.kv.set('user:testuser', JSON.stringify({
-          username: 'testuser',
-          hash,
-          salt,
-          createdAt: new Date().toISOString()
-        }));
-        await global.kv.sadd('all_users', 'testuser');
-      } catch (e) {
-        console.log('KV save failed (but memory saved):', e.message);
+    saveMemoryUser('testuser', userData);
+
+    try {
+      const kv = await getKv();
+      if (kv) {
+        await kv.set('user:testuser', JSON.stringify(userData));
+        await kv.sadd('all_users', 'testuser');
       }
+    } catch (e) {
+      console.log('KV save failed (but memory saved):', e.message);
     }
 
-    return res.json({ 
-      success: true, 
-      message: 'User test berhasil dibuat',
-      username: 'testuser',
-      password: 'password123',
-      nextStep: 'Coba login dengan credentials ini'
+    // FIX: password tidak lagi dikembalikan lewat response. Kalau kamu butuh
+    // tahu kredensial testuser, lihat langsung di kode ini ('password123'),
+    // jangan expose lewat API publik.
+    return res.json({
+      success: true,
+      message: 'User test berhasil dibuat'
     });
   } catch (e) {
     console.error('Seed error:', e);
@@ -56,13 +82,4 @@ export default async function handler(req, res) {
       error: 'Server error saat seeding data'
     });
   }
-}
-
-// Initialize KV
-if (typeof window === 'undefined') {
-  import('@vercel/kv')
-    .then(({ kv }) => {
-      global.kv = kv;
-    })
-    .catch(() => console.log('KV not available'));
 }
