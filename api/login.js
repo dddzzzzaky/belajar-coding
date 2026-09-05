@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { memoryDB, getMemoryUser, addMemoryLog, saveMemoryLastLogin } from '../lib/memoryDb.js';
+import { checkAndRecordRequest } from '../lib/rateLimit.js';
 
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
@@ -77,8 +78,15 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { username, password } = req.body || {};
   const ip = getIp(req);
+
+  // Auto-blacklist: tolak lebih awal kalau IP ini lagi kirim traffic tidak normal
+  const rl = await checkAndRecordRequest(ip);
+  if (rl.blocked) {
+    return res.status(429).json({ error: 'Terlalu banyak percobaan dari alamat ini, coba lagi nanti' });
+  }
+
+  const { username, password } = req.body || {};
 
   if (!username || !password) {
     return res.status(400).json({ error: 'Username dan password wajib diisi' });
