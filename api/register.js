@@ -5,20 +5,34 @@ function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
+// FIX: sama seperti file lain — KV di-lazy-load dan di-await.
+let kvPromise = null;
+function getKv() {
+  if (!kvPromise) {
+    kvPromise = import('@vercel/kv')
+      .then(({ kv }) => kv)
+      .catch((e) => {
+        console.log('KV not available:', e.message);
+        return null;
+      });
+  }
+  return kvPromise;
+}
+
 async function userExists(username) {
   // Check memory first
   if (getMemoryUser(username)) return true;
 
   // Check KV
   try {
-    if (global.kv) {
-      const existing = await global.kv.get(`user:${username}`);
+    const kv = await getKv();
+    if (kv) {
+      const existing = await kv.get(`user:${username}`);
       if (existing) return true;
     }
   } catch (e) {
     console.log('KV check failed:', e.message);
   }
-
   return false;
 }
 
@@ -33,11 +47,15 @@ async function saveUser(username, hash, salt) {
   // Save to memory
   saveMemoryUser(username, userData);
 
-  // Try KV if available
+  // Try KV if available.
+  // Catatan: pakai { nx: true } supaya KV cuma nulis kalau key belum ada —
+  // ini mengurangi (walau tidak 100% menghilangkan) risiko dua pendaftaran
+  // dengan username sama yang lolos bareng lalu saling timpa data.
   try {
-    if (global.kv) {
-      await global.kv.set(`user:${username}`, JSON.stringify(userData));
-      await global.kv.sadd('all_users', username);
+    const kv = await getKv();
+    if (kv) {
+      await kv.set(`user:${username}`, JSON.stringify(userData), { nx: true });
+      await kv.sadd('all_users', username);
     }
   } catch (e) {
     console.log('KV save failed:', e.message);
@@ -83,7 +101,6 @@ export default async function handler(req, res) {
     // Create new user
     const salt = crypto.randomBytes(16).toString('hex');
     const hash = hashPassword(password, salt);
-
     await saveUser(username, hash, salt);
 
     return res.status(201).json({ success: true, message: 'Berhasil daftar! Silakan login' });
@@ -91,13 +108,4 @@ export default async function handler(req, res) {
     console.error('Register error:', e);
     return res.status(500).json({ error: 'Server error' });
   }
-}
-
-// Initialize KV
-if (typeof window === 'undefined') {
-  import('@vercel/kv')
-    .then(({ kv }) => {
-      global.kv = kv;
-    })
-    .catch(() => console.log('KV not available'));
 }
