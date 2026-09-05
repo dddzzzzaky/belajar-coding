@@ -1,5 +1,14 @@
 import crypto from 'crypto';
 import { memoryDB, getMemoryUser, saveMemoryUser } from '../lib/memoryDb.js';
+import { checkAndRecordRequest } from '../lib/rateLimit.js';
+
+function getIp(req) {
+  const real = req.headers['x-real-ip'];
+  if (real) return real;
+  const fwd = req.headers['x-forwarded-for'];
+  if (fwd) return fwd.split(',').pop().trim();
+  return req.socket?.remoteAddress || 'unknown';
+}
 
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
@@ -67,6 +76,12 @@ async function saveUser(username, hash, salt) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const ip = getIp(req);
+  const rl = await checkAndRecordRequest(ip);
+  if (rl.blocked) {
+    return res.status(429).json({ error: 'Terlalu banyak percobaan dari alamat ini, coba lagi nanti' });
   }
 
   const { username, password } = req.body || {};
