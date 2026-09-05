@@ -1,5 +1,14 @@
 import crypto from 'crypto';
 import { memoryDB, saveMemoryUser } from '../lib/memoryDb.js';
+import { checkAndRecordRequest } from '../lib/rateLimit.js';
+
+function getIp(req) {
+  const real = req.headers['x-real-ip'];
+  if (real) return real;
+  const fwd = req.headers['x-forwarded-for'];
+  if (fwd) return fwd.split(',').pop().trim();
+  return req.socket?.remoteAddress || 'unknown';
+}
 
 // FIX: sama seperti file lain — KV di-lazy-load dan di-await.
 let kvPromise = null;
@@ -24,6 +33,12 @@ export default async function handler(req, res) {
   // dan langsung menampilkan username+password akun test di response JSON —
   // artinya siapa pun yang tahu URL-nya dapat akun valid ke aplikasi ini.
   // Sekarang wajib pakai kredensial admin yang sama seperti /api/admin.
+  const ip = getIp(req);
+  const rl = await checkAndRecordRequest(ip);
+  if (rl.blocked) {
+    return res.status(429).json({ error: 'Terlalu banyak percobaan dari alamat ini, coba lagi nanti' });
+  }
+
   const adminUser = req.query?.adminUser || req.body?.adminUser;
   const adminPass = req.query?.adminPass || req.body?.adminPass;
 
@@ -82,4 +97,4 @@ export default async function handler(req, res) {
       error: 'Server error saat seeding data'
     });
   }
-}
+    }
