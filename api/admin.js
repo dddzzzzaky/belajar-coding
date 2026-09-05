@@ -1,4 +1,13 @@
 import { memoryDB, getMemoryUser, getMemoryLastLogin } from '../lib/memoryDb.js';
+import { checkAndRecordRequest } from '../lib/rateLimit.js';
+
+function getIp(req) {
+  const real = req.headers['x-real-ip'];
+  if (real) return real;
+  const fwd = req.headers['x-forwarded-for'];
+  if (fwd) return fwd.split(',').pop().trim();
+  return req.socket?.remoteAddress || 'unknown';
+}
 
 // FIX: sama seperti login.js — KV di-lazy-load dan di-await, bukan
 // fire-and-forget di top-level yang bisa telat siap saat cold start.
@@ -18,6 +27,12 @@ function getKv() {
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const ip = getIp(req);
+  const rl = await checkAndRecordRequest(ip);
+  if (rl.blocked) {
+    return res.status(429).json({ error: 'Terlalu banyak percobaan dari alamat ini, coba lagi nanti' });
   }
 
   const { adminUser, adminPass } = req.body || {};
