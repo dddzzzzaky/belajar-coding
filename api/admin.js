@@ -1,10 +1,24 @@
 import { memoryDB, getMemoryUser, getMemoryLastLogin } from '../lib/memoryDb.js';
 
+// FIX: sama seperti login.js — KV di-lazy-load dan di-await, bukan
+// fire-and-forget di top-level yang bisa telat siap saat cold start.
+let kvPromise = null;
+function getKv() {
+  if (!kvPromise) {
+    kvPromise = import('@vercel/kv')
+      .then(({ kv }) => kv)
+      .catch((e) => {
+        console.log('KV not available:', e.message);
+        return null;
+      });
+  }
+  return kvPromise;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
-  
 
   const { adminUser, adminPass } = req.body || {};
 
@@ -18,17 +32,18 @@ export default async function handler(req, res) {
   }
 
   try {
+    const kv = await getKv();
     let usernames = [];
     let logs = [...memoryDB.logs];
 
     // Try to get from KV
     try {
-      if (global.kv) {
-        const kvUsers = (await global.kv.smembers('all_users')) || [];
+      if (kv) {
+        const kvUsers = (await kv.smembers('all_users')) || [];
         usernames = [...new Set([...usernames, ...kvUsers])];
-        
-        const kvLogs = (await global.kv.lrange('login_logs', 0, 99)) || [];
-        logs = [...kvLogs.map(l => typeof l === 'string' ? JSON.parse(l) : l), ...logs];
+
+        const kvLogs = (await kv.lrange('login_logs', 0, 99)) || [];
+        logs = [...kvLogs.map(l => (typeof l === 'string' ? JSON.parse(l) : l)), ...logs];
       }
     } catch (e) {
       console.log('KV fetch failed:', e.message);
@@ -41,11 +56,11 @@ export default async function handler(req, res) {
     const users = [];
     for (const u of usernames) {
       let user = getMemoryUser(u);
-      
+
       // Try KV if not in memory
-      if (!user && global.kv) {
+      if (!user && kv) {
         try {
-          const raw = await global.kv.get(`user:${u}`);
+          const raw = await kv.get(`user:${u}`);
           user = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
         } catch (e) {
           console.log('KV user fetch failed:', e.message);
@@ -54,14 +69,16 @@ export default async function handler(req, res) {
 
       if (user) {
         let lastLogin = getMemoryLastLogin(u);
-if (!lastLogin && global.kv) {
-  try {
-    const raw = await global.kv.get(`lastlogin:${u}`);
-    lastLogin = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
-  } catch (e) {
-    console.log('KV lastlogin fetch failed:', e.message);
-  }
-}
+
+        if (!lastLogin && kv) {
+          try {
+            const raw = await kv.get(`lastlogin:${u}`);
+            lastLogin = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
+          } catch (e) {
+            console.log('KV lastlogin fetch failed:', e.message);
+          }
+        }
+
         users.push({
           username: u,
           createdAt: user.createdAt || null,
@@ -80,13 +97,4 @@ if (!lastLogin && global.kv) {
     console.error('Admin error:', e);
     return res.status(500).json({ error: 'Server error' });
   }
-}
-
-// Initialize KV
-if (typeof window === 'undefined') {
-  import('@vercel/kv')
-    .then(({ kv }) => {
-      global.kv = kv;
-    })
-    .catch(() => console.log('KV not available'));
 }
