@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { memoryDB, getMemoryUser, addMemoryLog, saveMemoryLastLogin } from '../lib/memoryDb.js';
 import { checkAndRecordRequest } from '../lib/rateLimit.js';
+import { getKv } from '../lib/kv.js';
 
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
@@ -18,22 +19,9 @@ function getIp(req) {
   return req.socket?.remoteAddress || 'unknown';
 }
 
-// FIX: sebelumnya KV di-init lewat `import().then()` di bagian bawah file tanpa
-// di-await — request pertama di cold start bisa jalan SEBELUM global.kv ke-set,
-// jadi diam-diam fallback ke memory doang. Sekarang di-lazy-load dan di-await
-// setiap dipakai, supaya selalu pasti KV-nya siap sebelum dibaca/ditulis.
-let kvPromise = null;
-function getKv() {
-  if (!kvPromise) {
-    kvPromise = import('@vercel/kv')
-      .then(({ kv }) => kv)
-      .catch((e) => {
-        console.log('KV not available:', e.message);
-        return null;
-      });
-  }
-  return kvPromise;
-}
+// FIX: init KV sekarang dipusatkan di lib/kv.js (dipakai bareng semua file)
+// supaya gak ada lagi 'global.kv' yang gak konsisten antar file.
+
 
 async function getUser(username) {
   // Check memory first (fastest)
