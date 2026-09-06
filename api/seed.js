@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { memoryDB, saveMemoryUser } from '../lib/memoryDb.js';
 import { checkAndRecordRequest } from '../lib/rateLimit.js';
+import { getKv } from '../lib/kv.js';
 
 function getIp(req) {
   const real = req.headers['x-real-ip'];
@@ -10,19 +11,8 @@ function getIp(req) {
   return req.socket?.remoteAddress || 'unknown';
 }
 
-// FIX: sama seperti file lain — KV di-lazy-load dan di-await.
-let kvPromise = null;
-function getKv() {
-  if (!kvPromise) {
-    kvPromise = import('@vercel/kv')
-      .then(({ kv }) => kv)
-      .catch((e) => {
-        console.log('KV not available:', e.message);
-        return null;
-      });
-  }
-  return kvPromise;
-}
+// FIX: init KV sekarang dipusatkan di lib/kv.js (dipakai bareng semua file).
+
 
 export default async function handler(req, res) {
   if (req.method !== 'POST' && req.method !== 'GET') {
@@ -97,4 +87,4 @@ export default async function handler(req, res) {
       error: 'Server error saat seeding data'
     });
   }
-    }
+}
