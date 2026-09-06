@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { memoryDB, getMemoryUser, saveMemoryUser } from '../lib/memoryDb.js';
 import { checkAndRecordRequest } from '../lib/rateLimit.js';
+import { getKv } from '../lib/kv.js';
 
 function getIp(req) {
   const real = req.headers['x-real-ip'];
@@ -14,19 +15,8 @@ function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
 
-// FIX: sama seperti file lain — KV di-lazy-load dan di-await.
-let kvPromise = null;
-function getKv() {
-  if (!kvPromise) {
-    kvPromise = import('@vercel/kv')
-      .then(({ kv }) => kv)
-      .catch((e) => {
-        console.log('KV not available:', e.message);
-        return null;
-      });
-  }
-  return kvPromise;
-}
+// FIX: init KV sekarang dipusatkan di lib/kv.js (dipakai bareng semua file).
+
 
 async function userExists(username) {
   // Check memory first
