@@ -1,5 +1,6 @@
 import { memoryDB, getMemoryUser, getMemoryLastLogin } from '../lib/memoryDb.js';
 import { checkAndRecordRequest } from '../lib/rateLimit.js';
+import { getKv } from '../lib/kv.js';
 
 function getIp(req) {
   const real = req.headers['x-real-ip'];
@@ -7,21 +8,6 @@ function getIp(req) {
   const fwd = req.headers['x-forwarded-for'];
   if (fwd) return fwd.split(',').pop().trim();
   return req.socket?.remoteAddress || 'unknown';
-}
-
-// FIX: sama seperti login.js — KV di-lazy-load dan di-await, bukan
-// fire-and-forget di top-level yang bisa telat siap saat cold start.
-let kvPromise = null;
-function getKv() {
-  if (!kvPromise) {
-    kvPromise = import('@vercel/kv')
-      .then(({ kv }) => kv)
-      .catch((e) => {
-        console.log('KV not available:', e.message);
-        return null;
-      });
-  }
-  return kvPromise;
 }
 
 export default async function handler(req, res) {
